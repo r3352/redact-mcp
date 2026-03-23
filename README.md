@@ -33,7 +33,7 @@ Same real value always maps to the same fake value. `obfuscate(text) -> deobfusc
 ### Quick install via npx (recommended)
 
 ```bash
-claude mcp add redact-mcp -- npx redact-mcp
+claude mcp add @mattzam/redact-mcp -- npx @mattzam/redact-mcp
 ```
 
 That's it. Claude Code will launch the server via npx on each session. The NER model (~110MB) downloads automatically on first use and is cached for subsequent runs.
@@ -41,7 +41,7 @@ That's it. Claude Code will launch the server via npx on each session. The NER m
 To enable audit logging:
 
 ```bash
-claude mcp add redact-mcp -e REDACT_AUDIT_LOG=true -- npx redact-mcp
+claude mcp add @mattzam/redact-mcp -e REDACT_AUDIT_LOG=true -- npx @mattzam/redact-mcp
 ```
 
 ### As a Claude Code plugin (full features: hooks + skills)

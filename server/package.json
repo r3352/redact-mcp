@@ -1,5 +1,5 @@
 {
-  "name": "redact-mcp",
+  "name": "@mattzam/redact-mcp",
   "version": "2.0.0",
   "description": "MCP server that auto-obfuscates sensitive data (IPs, hostnames, emails, API keys, PII) so Claude never sees real client data during pentesting",
   "type": "module",
