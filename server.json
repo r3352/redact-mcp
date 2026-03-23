@@ -1,5 +1,5 @@
 {
-  "$schema": "https://registry.modelcontextprotocol.io/schema/server.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.r3352/redact-mcp",
   "title": "Redact MCP",
   "description": "Auto-detects and obfuscates PII (IPs, emails, API keys, names) so Claude never sees real client data",
