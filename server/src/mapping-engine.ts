@@ -4,9 +4,12 @@
  * with longest-first replacement to prevent partial match corruption.
  */
 
-import { detectPatterns, type PatternType } from './pattern-detector.js';
+import { detectPatterns, detectPatternsSync, type PatternType } from './pattern-detector.js';
 import { generateFake, type Counters, type MappingType } from './fake-generator.js';
 import { Persistence, type PersistedState } from './persistence.js';
+import { AuditLogger, type AuditDetection } from './audit-logger.js';
+
+export type AuditOperation = 'proxy_request' | 'file_read' | 'obfuscate' | 'deobfuscate';
 
 export interface Mapping {
   real: string;
@@ -21,9 +24,11 @@ export class MappingEngine {
   private realToFake = new Map<string, Mapping>();
   private fakeToReal = new Map<string, Mapping>();
   private persistence: Persistence;
+  private auditLogger: AuditLogger;
 
   constructor(dataDir: string) {
     this.persistence = new Persistence(dataDir);
+    this.auditLogger = new AuditLogger(dataDir);
   }
 
   async init(): Promise<void> {
@@ -67,15 +72,30 @@ export class MappingEngine {
   }
 
   /**
-   * Obfuscate text by detecting and replacing all sensitive patterns.
+   * Get the audit logger instance (for the audit tool).
    */
-  obfuscate(text: string): string {
-    // 1. Detect patterns
-    const matches = detectPatterns(text);
+  getAuditLogger(): AuditLogger {
+    return this.auditLogger;
+  }
 
-    // 2. Ensure mappings exist for each match
+  /**
+   * Obfuscate text by detecting and replacing all sensitive patterns.
+   * Uses async NER + regex detection in parallel.
+   */
+  async obfuscate(text: string, operation: AuditOperation = 'obfuscate'): Promise<string> {
+    // 1. Detect patterns (async: regex + NER in parallel)
+    const matches = await detectPatterns(text);
+
+    // 2. Ensure mappings exist for each match, collect audit detections
+    const auditDetections: AuditDetection[] = [];
     for (const match of matches) {
-      this.getOrCreateMapping(match.value, match.type, 'auto');
+      const mapping = this.getOrCreateMapping(match.value, match.type, 'auto');
+      auditDetections.push({
+        type: match.type,
+        value: match.value,
+        fake: mapping.fake,
+        source: match.source ?? 'regex',
+      });
     }
 
     // 3. Sort all mappings by real value length descending (longest first)
@@ -91,22 +111,53 @@ export class MappingEngine {
       }
     }
 
+    // 5. Audit log (fire-and-forget)
+    this.auditLogger.log({
+      timestamp: new Date().toISOString(),
+      operation,
+      inputLength: text.length,
+      inputText: text,
+      detections: auditDetections,
+      outputLength: result.length,
+      outputText: result,
+    });
+
     return result;
   }
 
   /**
    * Deobfuscate text by reversing all fake values back to real values.
    */
-  deobfuscate(text: string): string {
+  deobfuscate(text: string, operation: AuditOperation = 'deobfuscate'): string {
     // Sort by fake value length descending
     const sortedMappings = [...this.fakeToReal.values()]
       .sort((a, b) => b.fake.length - a.fake.length);
 
+    const restorations: AuditDetection[] = [];
     let result = text;
     for (const mapping of sortedMappings) {
       if (result.includes(mapping.fake)) {
         result = result.split(mapping.fake).join(mapping.real);
+        restorations.push({
+          type: mapping.type,
+          value: mapping.real,
+          fake: mapping.fake,
+          source: mapping.source === 'manual' ? 'manual' : 'regex',
+        });
       }
+    }
+
+    // Audit log deobfuscation (fire-and-forget)
+    if (restorations.length > 0) {
+      this.auditLogger.log({
+        timestamp: new Date().toISOString(),
+        operation,
+        inputLength: text.length,
+        inputText: text,
+        detections: restorations,
+        outputLength: result.length,
+        outputText: result,
+      });
     }
 
     return result;
@@ -168,6 +219,9 @@ export class MappingEngine {
    * Flush pending writes to disk.
    */
   async flush(): Promise<void> {
-    await this.persistence.flush();
+    await Promise.all([
+      this.persistence.flush(),
+      this.auditLogger.flush(),
+    ]);
   }
 }

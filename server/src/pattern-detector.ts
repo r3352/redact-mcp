@@ -15,12 +15,20 @@ export type PatternType =
   | 'api_key'
   | 'jwt'
   | 'bearer'
-  | 'aws_key';
+  | 'aws_key'
+  | 'organization'
+  | 'location'
+  | 'private_key'
+  | 'connection_string'
+  | 'generic_secret'
+  | 'mac_address'
+  | 'street_address';
 
 export interface PatternMatch {
   value: string;
   type: PatternType;
   index: number;
+  source?: 'regex' | 'ner';
 }
 
 // Never obfuscate these values
@@ -117,6 +125,18 @@ const HOSTNAME_FALSE_POSITIVES = new Set([
   'e.g',
   'i.e',
   'vs.code',
+  'webpack.config',
+  'babel.config',
+  'jest.config',
+  'rollup.config',
+  'vite.config',
+  'eslint.config',
+  'prettier.config',
+  'next.config',
+  'nuxt.config',
+  'tailwind.config',
+  'postcss.config',
+  'playwright.config',
 ]);
 
 // Valid TLDs for hostname detection (common ones)
@@ -212,14 +232,18 @@ const PATTERNS: Array<{ type: PatternType; regex: RegExp; validate?: (match: str
       return domain !== 'example.com' && domain !== 'example.org' && domain !== 'example.net';
     },
   },
-  // Phone (US formats)
+  // Phone (US + international formats)
   {
     type: 'phone',
-    regex: /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g,
+    regex: /(?:\+\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b/g,
     validate: (match: string) => {
       const digits = match.replace(/\D/g, '');
-      // Must have 10 or 11 digits, not start with 555 area code (test numbers)
-      return (digits.length === 10 || digits.length === 11) && !digits.startsWith('555') && !(digits.length === 11 && digits.startsWith('1555'));
+      // Must have 7-15 digits (E.164 range), not start with 555 area code (test numbers)
+      if (digits.length < 7 || digits.length > 15) return false;
+      if (digits.startsWith('555') || (digits.length >= 4 && digits.startsWith('1555'))) return false;
+      // Must start with + or have at least 10 digits to avoid false positives
+      if (!match.startsWith('+') && digits.length < 10) return false;
+      return true;
     },
   },
   // IPv4
@@ -258,6 +282,36 @@ const PATTERNS: Array<{ type: PatternType; regex: RegExp; validate?: (match: str
     type: 'api_key',
     regex: /(?:api[_-]?key|api[_-]?secret|access[_-]?token|secret[_-]?key|auth[_-]?token|private[_-]?key|client[_-]?secret)["'\s:=]+([A-Za-z0-9_\-./+]{20,})/gi,
   },
+  // Private keys (PEM format)
+  {
+    type: 'private_key',
+    regex: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g,
+  },
+  // Connection strings (database URIs)
+  {
+    type: 'connection_string',
+    regex: /(?:mongodb|postgres|postgresql|mysql|redis|amqp|mssql):\/\/[^\s"'<>]+/g,
+  },
+  // Generic secrets (password/secret assignments)
+  {
+    type: 'generic_secret',
+    regex: /(?:password|passwd|secret)["'\s:=]+?([^\s"',;]{8,})/gi,
+  },
+  // MAC addresses
+  {
+    type: 'mac_address',
+    regex: /\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b/g,
+    validate: (match: string) => {
+      // Skip broadcast (FF:FF:FF:FF:FF:FF) and null (00:00:00:00:00:00) addresses
+      const upper = match.toUpperCase();
+      return upper !== 'FF:FF:FF:FF:FF:FF' && upper !== '00:00:00:00:00:00';
+    },
+  },
+  // Street addresses
+  {
+    type: 'street_address',
+    regex: /\b\d{1,5}\s+(?:[A-Z][a-z]+\s+){1,3}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Road|Rd|Lane|Ln|Court|Ct|Place|Pl|Way|Circle|Cir|Terrace|Ter|Trail|Trl|Parkway|Pkwy)\b/g,
+  },
   // Person names in JSON context: "name": "First Last"
   {
     type: 'person_name',
@@ -265,7 +319,10 @@ const PATTERNS: Array<{ type: PatternType; regex: RegExp; validate?: (match: str
   },
 ];
 
-export function detectPatterns(text: string): PatternMatch[] {
+/**
+ * Synchronous regex-only pattern detection.
+ */
+export function detectPatternsSync(text: string): PatternMatch[] {
   const matches: PatternMatch[] = [];
   const seen = new Set<string>(); // avoid duplicate matches at same position
 
@@ -274,7 +331,7 @@ export function detectPatterns(text: string): PatternMatch[] {
     let match: RegExpExecArray | null;
 
     while ((match = regex.exec(text)) !== null) {
-      // For patterns with capture groups (api_key, person_name), use group 1
+      // For patterns with capture groups (api_key, person_name, generic_secret), use group 1
       const value = match[1] ?? match[0];
       const index = match[1] ? match.index + match[0].indexOf(match[1]) : match.index;
 
@@ -284,9 +341,43 @@ export function detectPatterns(text: string): PatternMatch[] {
       if (pattern.validate && !pattern.validate(value)) continue;
 
       seen.add(key);
-      matches.push({ value, type: pattern.type, index });
+      matches.push({ value, type: pattern.type, index, source: 'regex' });
     }
   }
 
   return matches;
+}
+
+/**
+ * Check if two spans overlap.
+ */
+function spansOverlap(a: PatternMatch, b: PatternMatch): boolean {
+  const aEnd = a.index + a.value.length;
+  const bEnd = b.index + b.value.length;
+  return a.index < bEnd && b.index < aEnd;
+}
+
+/**
+ * Async pattern detection: runs regex + NER in parallel, merges results.
+ * Regex matches win when spans overlap (regex is more precise for structured data).
+ */
+export async function detectPatterns(text: string): Promise<PatternMatch[]> {
+  const { detectNEREntities } = await import('./ner-detector.js');
+
+  const [regexMatches, nerMatches] = await Promise.all([
+    Promise.resolve(detectPatternsSync(text)),
+    detectNEREntities(text),
+  ]);
+
+  // Merge: NER matches are added only if they don't overlap with regex matches
+  const merged = [...regexMatches];
+
+  for (const nerMatch of nerMatches) {
+    const overlaps = regexMatches.some(rm => spansOverlap(rm, nerMatch));
+    if (!overlaps) {
+      merged.push(nerMatch);
+    }
+  }
+
+  return merged;
 }

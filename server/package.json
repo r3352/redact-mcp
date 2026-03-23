@@ -1,15 +1,41 @@
 {
-  "name": "redact-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP server for auto-obfuscating sensitive data during pentesting",
+  "name": "redact-mcp",
+  "version": "2.0.0",
+  "description": "MCP server that auto-obfuscates sensitive data (IPs, hostnames, emails, API keys, PII) so Claude never sees real client data during pentesting",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "redact-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "redaction",
+    "pii",
+    "security",
+    "pentest",
+    "obfuscation",
+    "privacy",
+    "claude"
+  ],
+  "author": "Matthew Zamat",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/r3352/redact-mcp.git"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1"
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@huggingface/transformers": "^3.0.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

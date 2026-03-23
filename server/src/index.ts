@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 /**
- * Redact MCP Server
+ * Redact MCP Server v2
  * Auto-obfuscates sensitive client data during pentesting.
- * Registers 7 tools for obfuscation, deobfuscation, proxy requests, file reading, and mapping management.
+ * Registers 8 tools for obfuscation, deobfuscation, proxy requests, file reading,
+ * mapping management, and audit log access.
+ *
+ * v2 adds: NER-based entity detection, JSONL audit logging, 7 new pattern types.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -20,8 +23,25 @@ const DATA_DIR = process.env.REDACT_DATA_DIR || process.env.CLAUDE_PLUGIN_DATA |
 const engine = new MappingEngine(DATA_DIR);
 
 const server = new Server(
-  { name: 'redact-server', version: '1.0.0' },
-  { capabilities: { tools: {} } }
+  { name: 'redact-server', version: '2.0.0' },
+  {
+    capabilities: { tools: {} },
+    instructions: `REDACTION MODE IS ACTIVE. You MUST follow these rules for the ENTIRE session:
+
+1. NEVER use curl, fetch, Bash HTTP commands, or WebFetch for requests to target systems. ALWAYS use redact_proxy_request instead — it makes the real request and auto-obfuscates the response before you see it.
+
+2. NEVER use the Read tool for client data files, configs, or logs. ALWAYS use redact_read_file instead — it auto-obfuscates file contents.
+
+3. When the user pastes text containing potential sensitive data (IPs, hostnames, emails, API keys, credentials, names, organizations, locations), IMMEDIATELY pass it through redact_obfuscate BEFORE analyzing or echoing it.
+
+4. NEVER output real/unredacted sensitive values in your responses. You should only ever see and work with the obfuscated replacements (e.g., 198.51.100.x, target-N.example.com, user-N@example.com, [REDACTED_KEY_N]).
+
+5. Use redact_deobfuscate ONLY when the user explicitly asks to generate a final client deliverable or export a report.
+
+6. These rules apply automatically. No user configuration is needed. Do not ask the user whether to redact — just do it.
+
+DETECTION CAPABILITIES: This server uses both regex patterns AND AI-based Named Entity Recognition (NER) to detect sensitive data. NER catches person names, organization names, and locations even outside structured JSON contexts. Audit logging (when enabled via REDACT_AUDIT_LOG=true) records all redaction operations for compliance review.`,
+  }
 );
 
 // ─── List Tools ────────────────────────────────────────────────
@@ -30,7 +50,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: 'redact_obfuscate',
-      description: 'Takes raw text and returns an obfuscated version with all detected PII replaced by consistent fake values. Use this to sanitize any pasted text, command output, or data before analysis.',
+      description: 'Takes raw text and returns an obfuscated version with all detected PII replaced by consistent fake values. Uses regex + AI-based NER detection. Use this to sanitize any pasted text, command output, or data before analysis.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -92,7 +112,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           type: {
             type: 'string',
             description: 'Category of the value',
-            enum: ['hostname', 'ipv4', 'ipv6', 'email', 'person_name', 'phone', 'ssn', 'credit_card', 'api_key', 'jwt', 'bearer', 'aws_key', 'custom'],
+            enum: [
+              'hostname', 'ipv4', 'ipv6', 'email', 'person_name', 'phone',
+              'ssn', 'credit_card', 'api_key', 'jwt', 'bearer', 'aws_key',
+              'organization', 'location', 'private_key', 'connection_string',
+              'generic_secret', 'mac_address', 'street_address', 'custom',
+            ],
             default: 'custom',
           },
         },
@@ -118,6 +143,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {},
       },
     },
+    {
+      name: 'redact_audit_log',
+      description: 'View recent audit log entries showing what was redacted and when. Requires REDACT_AUDIT_LOG=true environment variable to be set.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          count: { type: 'number', description: 'Number of recent entries to return (default: 20)', default: 20 },
+        },
+      },
+    },
   ],
 }));
 
@@ -130,7 +165,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'redact_obfuscate': {
       const text = args?.text as string;
       if (!text) return { content: [{ type: 'text', text: 'Error: text parameter is required' }] };
-      const result = engine.obfuscate(text);
+      const result = await engine.obfuscate(text, 'obfuscate');
       return { content: [{ type: 'text', text: result }] };
     }
 
@@ -151,12 +186,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const followRedirects = args?.followRedirects !== false;
 
       // Deobfuscate inputs (in case Claude is using already-obfuscated values)
-      const url = engine.deobfuscate(rawUrl);
+      const url = engine.deobfuscate(rawUrl, 'proxy_request');
       const headers: Record<string, string> = {};
       for (const [k, v] of Object.entries(rawHeaders)) {
-        headers[engine.deobfuscate(k)] = engine.deobfuscate(v);
+        headers[engine.deobfuscate(k, 'proxy_request')] = engine.deobfuscate(v, 'proxy_request');
       }
-      const body = rawBody ? engine.deobfuscate(rawBody) : undefined;
+      const body = rawBody ? engine.deobfuscate(rawBody, 'proxy_request') : undefined;
 
       try {
         const fetchOptions: RequestInit = {
@@ -185,12 +220,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ].join('\n');
 
         // Obfuscate the entire response
-        const obfuscatedResponse = engine.obfuscate(rawResponse);
+        const obfuscatedResponse = await engine.obfuscate(rawResponse, 'proxy_request');
 
         return { content: [{ type: 'text', text: obfuscatedResponse }] };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: 'text', text: `Error making request: ${engine.obfuscate(errorMsg)}` }] };
+        const obfuscatedError = await engine.obfuscate(errorMsg, 'proxy_request');
+        return { content: [{ type: 'text', text: `Error making request: ${obfuscatedError}` }] };
       }
     }
 
@@ -202,7 +238,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const content = await readFile(path, encoding);
-        const obfuscated = engine.obfuscate(content);
+        const obfuscated = await engine.obfuscate(content, 'file_read');
         return { content: [{ type: 'text', text: obfuscated }] };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -258,6 +294,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: 'text', text: lines.join('\n') }] };
     }
 
+    case 'redact_audit_log': {
+      const count = (args?.count as number) || 20;
+      const logger = engine.getAuditLogger();
+
+      if (!logger.isEnabled()) {
+        return { content: [{ type: 'text', text: 'Audit logging is disabled. Set REDACT_AUDIT_LOG=true to enable.' }] };
+      }
+
+      const entries = await logger.getRecentEntries(count);
+      if (entries.length === 0) {
+        return { content: [{ type: 'text', text: 'No audit log entries found.' }] };
+      }
+
+      const lines: string[] = [`## Audit Log (last ${entries.length} entries)\n`];
+      for (const entry of entries) {
+        lines.push(`### ${entry.timestamp} — ${entry.operation}`);
+        lines.push(`Input: ${entry.inputLength} chars → Output: ${entry.outputLength} chars`);
+        if (entry.detections.length > 0) {
+          lines.push(`Detections (${entry.detections.length}):`);
+          for (const d of entry.detections) {
+            lines.push(`  [${d.source}] ${d.type}: "${d.value}" → "${d.fake}"`);
+          }
+        } else {
+          lines.push('No detections');
+        }
+        lines.push('');
+      }
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+
     default:
       return { content: [{ type: 'text', text: `Unknown tool: ${name}` }] };
   }
@@ -269,7 +336,7 @@ async function main() {
   await engine.init();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[redact] MCP server started');
+  console.error('[redact] MCP server v2 started');
 }
 
 main().catch((err) => {

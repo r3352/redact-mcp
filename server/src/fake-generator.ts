@@ -66,6 +66,43 @@ export function generateFake(type: MappingType, counters: Counters): string {
     case 'aws_key':
       return `[REDACTED_AWS_KEY_${n}]`;
 
+    case 'organization': {
+      let label = '';
+      let remaining = n;
+      while (remaining > 0) {
+        remaining--;
+        label = String.fromCharCode(65 + (remaining % 26)) + label;
+        remaining = Math.floor(remaining / 26);
+      }
+      return `Org_${label}`;
+    }
+
+    case 'location': {
+      let label = '';
+      let remaining = n;
+      while (remaining > 0) {
+        remaining--;
+        label = String.fromCharCode(65 + (remaining % 26)) + label;
+        remaining = Math.floor(remaining / 26);
+      }
+      return `City_${label}`;
+    }
+
+    case 'private_key':
+      return `[REDACTED_PRIVATE_KEY_${n}]`;
+
+    case 'connection_string':
+      return `[REDACTED_CONN_STRING_${n}]`;
+
+    case 'generic_secret':
+      return `[REDACTED_SECRET_${n}]`;
+
+    case 'mac_address':
+      return `02:00:00:00:00:${String(n).padStart(2, '0')}`;
+
+    case 'street_address':
+      return `${n} Redacted Street`;
+
     case 'custom':
       return `[REDACTED_CUSTOM_${n}]`;
 
