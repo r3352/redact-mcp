@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "redact-server": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/dist/index.js"],
+      "env": {
+        "REDACT_DATA_DIR": "${CLAUDE_PLUGIN_DATA}"
+      }
+    }
+  }
+}

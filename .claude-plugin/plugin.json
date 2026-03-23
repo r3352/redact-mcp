@@ -1,0 +1,7 @@
+{
+  "name": "redact",
+  "version": "1.0.0",
+  "description": "Auto-obfuscates sensitive client data during pentesting so Claude never sees real PII, hostnames, or credentials",
+  "author": { "name": "Matthew Zamat" },
+  "keywords": ["security", "pentest", "privacy", "redaction", "pii", "obfuscation"]
+}
