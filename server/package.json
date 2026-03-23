@@ -1,6 +1,6 @@
 {
   "name": "@mattzam/redact-mcp",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "MCP server that auto-obfuscates sensitive data (IPs, hostnames, emails, API keys, PII) so Claude never sees real client data during pentesting",
   "type": "module",
   "main": "dist/index.js",
@@ -27,6 +27,7 @@
     "privacy",
     "claude"
   ],
+  "mcpName": "io.github.r3352/redact-mcp",
   "author": "Matthew Zamat",
   "license": "MIT",
   "repository": {

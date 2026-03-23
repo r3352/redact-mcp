@@ -3,7 +3,7 @@
   "name": "io.github.r3352/redact-mcp",
   "title": "Redact MCP",
   "description": "Auto-detects and obfuscates PII (IPs, emails, API keys, names) so Claude never sees real client data",
-  "version": "2.0.0",
+  "version": "2.0.4",
   "repository": {
     "source": "github",
     "url": "https://github.com/r3352/redact-mcp"
@@ -12,7 +12,7 @@
     {
       "registryType": "npm",
       "identifier": "@mattzam/redact-mcp",
-      "version": "2.0.0",
+      "version": "2.0.4",
       "transport": {
         "type": "stdio"
       },
