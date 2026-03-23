@@ -19,13 +19,11 @@
       "environmentVariables": [
         {
           "name": "REDACT_AUDIT_LOG",
-          "description": "Enable JSONL audit trail for compliance tracking",
-          "required": false
+          "description": "Enable JSONL audit trail for compliance tracking"
         },
         {
           "name": "REDACT_DATA_DIR",
-          "description": "Directory for mappings and audit log storage",
-          "required": false
+          "description": "Directory for mappings and audit log storage"
         }
       ]
     }
